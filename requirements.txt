@@ -1,0 +1,4 @@
+schedule
+pytz
+requests
+python-dotenv
