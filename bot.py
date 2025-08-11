@@ -228,8 +228,8 @@ def bot_engine():
     return False
 
 def run_bot_engine():
+    global status_engine
     try:
-        global status_engine
         status_engine = not bot_engine()
     except Exception as e:
         status_engine = True
@@ -246,7 +246,7 @@ def check_time():
             threading.Thread(target=run_bot_engine).start()
 
 # Schedule the check every minute
-schedule.every(1).seconds.do(check_time)
+schedule.every(1).minutes.do(check_time)
 
 print("Scheduler started. Waiting for Saturday 6 PM (Ireland time)...")
 while True:
