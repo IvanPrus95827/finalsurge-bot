@@ -40,10 +40,30 @@ complete_messages = [
 incomplete_messages = [
     {
         'subject': 'Check in',
-        'body': 'Hi $NAME, Training seems to be going well? Let me know if you are having any issues'
+        'body': 'Hi $NAME, just checking last week wondering how you are finding training?'
     }
 ]
 status_engine = False
+
+def get_next_saturday():
+    global ireland_tz
+    """
+    Calculates and returns the date of the next Saturday.
+    """
+    today = datetime.now(ireland_tz).date()  # Get today's date
+    
+    # Calculate days until next Saturday (Saturday is weekday 5, Monday is 0)
+    # If today is Saturday (5), (5 - 5) % 7 = 0, so 7 days are added to get *next* Saturday.
+    # If today is Sunday (6), (5 - 6) % 7 = -1 % 7 = 6, so 6 days are added.
+    # If today is Friday (4), (5 - 4) % 7 = 1, so 1 day is added.
+    days_until_saturday = (5 - today.weekday() + 7) % 7
+    
+    # If today is already Saturday, we want the *next* Saturday, so add 7 days.
+    if days_until_saturday == 0:
+        days_until_saturday = 7
+
+    next_saturday = today + timedelta(days=days_until_saturday)
+    return next_saturday
 
 def get_access_token(email, password):
     try:
@@ -186,14 +206,16 @@ def send_message_to_athlete(token, user_key, subject, body):
         print(f"An error occurred while sending message to athlete: {e}")
     return False
 
-def bot_engine():
+def bot_engine(start_date, end_date):
     global ireland_tz, complete_messages, incomplete_messages
-    now_ireland = datetime.now(ireland_tz)
-    start_of_week = now_ireland - timedelta(days=now_ireland.isoweekday())
     index_complete = random.randint(0, len(complete_messages) - 1)
     index_incomplete = random.randint(0, len(incomplete_messages) - 1)
 
-    print(f"---- Checking from {start_of_week.date()} to {now_ireland.date()} ----")
+    print("-----------------------------------------------------------------------------------------------------------------")
+    print(f"📅 Period Checked: {start_date.date():%B %d} to {end_date.date():%B %d} (as of {datetime.now(ireland_tz):%I:%M %p, %B %d})")
+    total_athlete_cnt = no_plan_athlete_cnt = complete_athlete_cnt = incomplete_athlete_cnt = 0
+    start_date = start_date.strftime('%Y-%m-%d')
+    end_date = end_date.strftime('%Y-%m-%d')
     email = os.getenv('USER_EMAIL')
     password = os.getenv('USER_PASSWORD')
 
@@ -203,12 +225,11 @@ def bot_engine():
 
         if athlete_data != None:
             for team, members in athlete_data.items():
-                print(f"Team: {team}")
+                # print(f"Team: {team}")
                 for member in members:
+                    total_athlete_cnt = total_athlete_cnt + 1
                     # print(f"  - {member['first_name']} {member['last_name']} ({member['email']})")
                     user_key = member['user_key']
-                    start_date = start_of_week.strftime('%Y-%m-%d')
-                    end_date = now_ireland.strftime('%Y-%m-%d')
                     workouts = get_plan_data(token, user_key, start_date, end_date)
                     if workouts != None and len(workouts) > 0:
                         incomplete_workouts = get_incomplete_workouts(workouts)
@@ -217,20 +238,36 @@ def bot_engine():
                         if len(incomplete_workouts) > 0:
                             subject = incomplete_messages[index_incomplete]['subject']
                             body = incomplete_messages[index_incomplete]['body']
+                            incomplete_athlete_cnt = incomplete_athlete_cnt + 1
                         else:
                             subject = complete_messages[index_complete]['subject']
+                            complete_athlete_cnt = complete_athlete_cnt + 1
                             body = complete_messages[index_complete]['body']
                         body = body.replace('$NAME', member['first_name'])
                         # print(subject)
-                        # print(body)
-                        send_message_to_athlete(token, user_key, subject, body)
+                        # send_message_to_athlete(token, user_key, subject, body)
+                    else:
+                        no_plan_athlete_cnt = no_plan_athlete_cnt + 1
+            print(f'''
+🏋️ Athlete Status:
+    ✅ Completed Workouts: {complete_athlete_cnt}
+    🔄 Incomplete Workouts: {incomplete_athlete_cnt}
+    ⏳ No Workout Plan: {no_plan_athlete_cnt}
+''')
+            print(f"⏰ Next Check: 6 PM, Saturday, {get_next_saturday():%B %d}")
+            print("-----------------------------------------------------------------------------------------------------------------")
             return True
+    print("❌ Failed to check the period.")
+    print("-----------------------------------------------------------------------------------------------------------------")
     return False
 
 def run_bot_engine():
-    global status_engine
+    global status_engine, ireland_tz
     try:
-        status_engine = not bot_engine()
+        now_ireland = datetime.now(ireland_tz)
+        start_of_week = now_ireland - timedelta(days=now_ireland.isoweekday())
+
+        status_engine = not bot_engine(start_of_week, now_ireland)
     except Exception as e:
         status_engine = True
 
@@ -238,12 +275,12 @@ def check_time():
     global ireland_tz, status_engine
     now = datetime.now(ireland_tz)
     if now.weekday() == 5 and now.hour == 18 and now.minute == 0:  # Saturday 6:00 PM
-    # if now.second == 30:
+    # if now.minute % 5 == 0:
         status_engine = True
     if status_engine == True:
         status_engine = False
-        if now.weekday() == 5:
-            threading.Thread(target=run_bot_engine).start()
+        # if now.weekday() == 5:
+        threading.Thread(target=run_bot_engine).start()
 
 # Schedule the check every minute
 schedule.every(1).minutes.do(check_time)
