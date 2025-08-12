@@ -6,6 +6,7 @@ import pytz
 import random
 import os
 from dotenv import load_dotenv
+from engine import generate_answer
 import threading
 
 load_dotenv()
@@ -22,6 +23,16 @@ except pytz.UnknownTimeZoneError:
 
 session = requests.Session()
 session.timeout = 20
+
+# Inbox listener configuration/state
+INBOX_LISTENER_ENABLED = os.getenv('INBOX_LISTENER_ENABLED', 'true').lower() == 'true'
+INBOX_POLL_INTERVAL_SECONDS = int(os.getenv('INBOX_POLL_INTERVAL_SECONDS', '60'))
+TOKEN_TTL_SECONDS = int(os.getenv('TOKEN_TTL_SECONDS', '3300'))  # ~55 minutes
+
+_auth_token = None
+_token_acquired_at = None
+_last_inbox_after_time = datetime.utcnow()
+# _last_inbox_after_time = None
 
 complete_messages = [
     {
@@ -196,7 +207,7 @@ def send_message_to_athlete(token, user_key, subject, body):
         }
         response = requests.post(url, headers=headers, json=payload)
         if response.status_code == 200:
-            print("Message sent successfully.")
+            # print("Message sent successfully.")
             return True
         else:
             print(f"Failed to send message: {response.status_code}")
@@ -205,6 +216,114 @@ def send_message_to_athlete(token, user_key, subject, body):
     except Exception as e:
         print(f"An error occurred while sending message to athlete: {e}")
     return False
+
+# ===== Inbox listener helpers =====
+
+def _ensure_access_token() -> str:
+    """
+    Return a valid access token, caching it for TOKEN_TTL_SECONDS.
+    """
+    global _auth_token, _token_acquired_at
+    try:
+        now = time.time()
+        if _auth_token and _token_acquired_at and (now - _token_acquired_at) < TOKEN_TTL_SECONDS:
+            return _auth_token
+        email = os.getenv('USER_EMAIL')
+        password = os.getenv('USER_PASSWORD')
+        token = get_access_token(email, password)
+        if token:
+            _auth_token = token
+            _token_acquired_at = now
+            return token
+    except Exception as e:
+        print(f"Error ensuring access token: {e}")
+    return None
+
+
+def fetch_inbox_messages(after_time_iso: str = None):
+    """
+    Call MailboxMessageList to fetch inbox messages.
+    AfterTime should be ISO string (UTC). If None, API returns recent messages.
+    """
+    token = _ensure_access_token()
+    if not token:
+        return None
+    base_url = "https://beta.finalsurge.com/api/MailboxMessageList"
+    params = {
+        "SentItems": "false"
+    }
+    if after_time_iso:
+        params["BeforeTime"] = after_time_iso
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json;charset=UTF-8"
+    }
+    try:
+        resp = requests.get(base_url, headers=headers, params=params, timeout=20)
+        if resp.status_code == 200:
+            return resp.json().get("data")
+        else:
+            print(f"Failed to fetch inbox messages: {resp.status_code} - {resp.text[:200]}")
+    except requests.exceptions.Timeout:
+        print("Request timed out while fetching inbox messages.")
+    except Exception as e:
+        print(f"Error fetching inbox messages: {e}")
+    return None
+
+
+def process_inbox_messages(messages):
+    """
+    Minimal processing: print and return latest message timestamp for cursor advancement.
+    Expected each message to include fields like: id, subject, body, from_user_name, date_sent, etc.
+    """
+    global _auth_token
+    if not messages:
+        return None
+    latest_ts = None
+    for m in messages:
+        sender = m['from'].get('name') or 'Unknown'
+        subject = m.get('subject', '')
+        user_key = m['from'].get('key')
+        body_preview = m.get('text', '') or ''
+        sent_at = m.get('timestamp')
+        print("-----------------------------------------------------------------------------------------------------------------")
+        print(f"📥 Inbox: {sender} | {subject} | {sent_at}\n   message: {body_preview}")
+        result = generate_answer(subject, body_preview)
+        if result is None:
+            continue
+        if result.get('status') == 'yes':
+            print(f" 💬 Reply: {result.get('answer')}")
+            send_message_to_athlete(_auth_token, user_key, subject, result.get('answer'))
+        else:
+            print(" 💬 No Reply!")
+            
+        # Track latest timestamp
+        if sent_at:
+            try:
+                # Keep as ISO string; compare lexicographically if ISO format
+                if (latest_ts is None) or (str(sent_at) > str(latest_ts)):
+                    latest_ts = str(sent_at)
+            except Exception:
+                pass
+    return latest_ts
+
+
+def inbox_poll_tick():
+    """
+    One poll tick: fetch messages after the saved cursor and process them.
+    Updates the global _last_inbox_after_time to the latest timestamp.
+    """
+    global _last_inbox_after_time
+    try:
+        messages = fetch_inbox_messages(_last_inbox_after_time)
+        if messages is None:
+            return
+        latest = process_inbox_messages(messages)
+        if latest:
+            # Advance cursor slightly to avoid re-reading the last message
+            _last_inbox_after_time = latest
+    except Exception as e:
+        print(f"Error during inbox poll tick: {e}")
 
 def bot_engine(start_date, end_date):
     global ireland_tz, complete_messages, incomplete_messages
@@ -244,8 +363,7 @@ def bot_engine(start_date, end_date):
                             complete_athlete_cnt = complete_athlete_cnt + 1
                             body = complete_messages[index_complete]['body']
                         body = body.replace('$NAME', member['first_name'])
-                        # print(subject)
-                        # send_message_to_athlete(token, user_key, subject, body)
+                        send_message_to_athlete(token, user_key, subject, body)
                     else:
                         no_plan_athlete_cnt = no_plan_athlete_cnt + 1
             print(f'''
@@ -255,10 +373,8 @@ def bot_engine(start_date, end_date):
     ⏳ No Workout Plan: {no_plan_athlete_cnt}
 ''')
             print(f"⏰ Next Check: 6 PM, Saturday, {get_next_saturday():%B %d}")
-            print("-----------------------------------------------------------------------------------------------------------------")
             return True
     print("❌ Failed to check the period.")
-    print("-----------------------------------------------------------------------------------------------------------------")
     return False
 
 def run_bot_engine():
@@ -275,15 +391,19 @@ def check_time():
     global ireland_tz, status_engine
     now = datetime.now(ireland_tz)
     if now.weekday() == 5 and now.hour == 18 and now.minute == 0:  # Saturday 6:00 PM
-    # if now.minute % 5 == 0:
         status_engine = True
     if status_engine == True:
         status_engine = False
-        # if now.weekday() == 5:
-        threading.Thread(target=run_bot_engine).start()
+        if now.weekday() == 5:
+            threading.Thread(target=run_bot_engine).start()
 
 # Schedule the check every minute
 schedule.every(1).minutes.do(check_time)
+
+# Inbox polling schedule
+if INBOX_LISTENER_ENABLED:
+    print('Inbox listener enabled')
+    schedule.every(INBOX_POLL_INTERVAL_SECONDS).seconds.do(inbox_poll_tick)
 
 print("Scheduler started. Waiting for Saturday 6 PM (Ireland time)...")
 while True:

@@ -2,3 +2,4 @@ schedule
 pytz
 requests
 python-dotenv
+google-genai
