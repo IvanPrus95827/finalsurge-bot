@@ -31,7 +31,7 @@ TOKEN_TTL_SECONDS = int(os.getenv('TOKEN_TTL_SECONDS', '3300'))  # ~55 minutes
 
 _auth_token = None
 _token_acquired_at = None
-_last_inbox_after_time = datetime.now(datetime.timezone.utc)
+_last_inbox_after_time = datetime.utcnow()
 # _last_inbox_after_time = None
 
 complete_messages = [
