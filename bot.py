@@ -31,7 +31,7 @@ TOKEN_TTL_SECONDS = int(os.getenv('TOKEN_TTL_SECONDS', '3300'))  # ~55 minutes
 
 _auth_token = None
 _token_acquired_at = None
-_last_inbox_after_time = datetime.utcnow()
+_last_inbox_after_time = datetime.now(datetime.timezone.utc)
 # _last_inbox_after_time = None
 
 complete_messages = [
@@ -346,7 +346,7 @@ def process_inbox_messages(messages):
                 continue
             if result.get('status') == 'yes':
                 print(f" 💬 Reply: {result.get('answer')}")
-                send_message_to_athlete(_auth_token, user_key, subject, result.get('answer'))
+                send_message_to_athlete(_auth_token, user_key, 'RE: ' + subject, result.get('answer'))
             else:
                 print(" 💬 No Reply!")
                 
