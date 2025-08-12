@@ -217,6 +217,58 @@ def send_message_to_athlete(token, user_key, subject, body):
         print(f"An error occurred while sending message to athlete: {e}")
     return False
 
+def bot_engine(start_date, end_date):
+    global ireland_tz, complete_messages, incomplete_messages
+    index_complete = random.randint(0, len(complete_messages) - 1)
+    index_incomplete = random.randint(0, len(incomplete_messages) - 1)
+
+    print("-----------------------------------------------------------------------------------------------------------------")
+    print(f"📅 Period Checked: {start_date.date():%B %d} to {end_date.date():%B %d} (as of {datetime.now(ireland_tz):%I:%M %p, %B %d})")
+    total_athlete_cnt = no_plan_athlete_cnt = complete_athlete_cnt = incomplete_athlete_cnt = 0
+    start_date = start_date.strftime('%Y-%m-%d')
+    end_date = end_date.strftime('%Y-%m-%d')
+    email = os.getenv('USER_EMAIL')
+    password = os.getenv('USER_PASSWORD')
+
+    token = get_access_token(email, password)
+    if token != None:
+        athlete_data = get_athlete_data(token)
+
+        if athlete_data != None:
+            for team, members in athlete_data.items():
+                # print(f"Team: {team}")
+                for member in members:
+                    total_athlete_cnt = total_athlete_cnt + 1
+                    # print(f"  - {member['first_name']} {member['last_name']} ({member['email']})")
+                    user_key = member['user_key']
+                    workouts = get_plan_data(token, user_key, start_date, end_date)
+                    if workouts != None and len(workouts) > 0:
+                        incomplete_workouts = get_incomplete_workouts(workouts)
+                        subject = ""
+                        body = ""
+                        if len(incomplete_workouts) > 0:
+                            subject = incomplete_messages[index_incomplete]['subject']
+                            body = incomplete_messages[index_incomplete]['body']
+                            incomplete_athlete_cnt = incomplete_athlete_cnt + 1
+                        else:
+                            subject = complete_messages[index_complete]['subject']
+                            complete_athlete_cnt = complete_athlete_cnt + 1
+                            body = complete_messages[index_complete]['body']
+                        body = body.replace('$NAME', member['first_name'])
+                        send_message_to_athlete(token, user_key, subject, body)
+                    else:
+                        no_plan_athlete_cnt = no_plan_athlete_cnt + 1
+            print(f'''
+🏋️ Athlete Status:
+    ✅ Completed Workouts: {complete_athlete_cnt}
+    🔄 Incomplete Workouts: {incomplete_athlete_cnt}
+    ⏳ No Workout Plan: {no_plan_athlete_cnt}
+''')
+            print(f"⏰ Next Check: 6 PM, Saturday, {get_next_saturday():%B %d}")
+            return True
+    print("❌ Failed to check the period.")
+    return False
+    
 # ===== Inbox listener helpers =====
 
 def _ensure_access_token() -> str:
@@ -329,57 +381,6 @@ def inbox_poll_tick():
     except Exception as e:
         print(f"Error during inbox poll tick: {e}")
 
-def bot_engine(start_date, end_date):
-    global ireland_tz, complete_messages, incomplete_messages
-    index_complete = random.randint(0, len(complete_messages) - 1)
-    index_incomplete = random.randint(0, len(incomplete_messages) - 1)
-
-    print("-----------------------------------------------------------------------------------------------------------------")
-    print(f"📅 Period Checked: {start_date.date():%B %d} to {end_date.date():%B %d} (as of {datetime.now(ireland_tz):%I:%M %p, %B %d})")
-    total_athlete_cnt = no_plan_athlete_cnt = complete_athlete_cnt = incomplete_athlete_cnt = 0
-    start_date = start_date.strftime('%Y-%m-%d')
-    end_date = end_date.strftime('%Y-%m-%d')
-    email = os.getenv('USER_EMAIL')
-    password = os.getenv('USER_PASSWORD')
-
-    token = get_access_token(email, password)
-    if token != None:
-        athlete_data = get_athlete_data(token)
-
-        if athlete_data != None:
-            for team, members in athlete_data.items():
-                # print(f"Team: {team}")
-                for member in members:
-                    total_athlete_cnt = total_athlete_cnt + 1
-                    # print(f"  - {member['first_name']} {member['last_name']} ({member['email']})")
-                    user_key = member['user_key']
-                    workouts = get_plan_data(token, user_key, start_date, end_date)
-                    if workouts != None and len(workouts) > 0:
-                        incomplete_workouts = get_incomplete_workouts(workouts)
-                        subject = ""
-                        body = ""
-                        if len(incomplete_workouts) > 0:
-                            subject = incomplete_messages[index_incomplete]['subject']
-                            body = incomplete_messages[index_incomplete]['body']
-                            incomplete_athlete_cnt = incomplete_athlete_cnt + 1
-                        else:
-                            subject = complete_messages[index_complete]['subject']
-                            complete_athlete_cnt = complete_athlete_cnt + 1
-                            body = complete_messages[index_complete]['body']
-                        body = body.replace('$NAME', member['first_name'])
-                        send_message_to_athlete(token, user_key, subject, body)
-                    else:
-                        no_plan_athlete_cnt = no_plan_athlete_cnt + 1
-            print(f'''
-🏋️ Athlete Status:
-    ✅ Completed Workouts: {complete_athlete_cnt}
-    🔄 Incomplete Workouts: {incomplete_athlete_cnt}
-    ⏳ No Workout Plan: {no_plan_athlete_cnt}
-''')
-            print(f"⏰ Next Check: 6 PM, Saturday, {get_next_saturday():%B %d}")
-            return True
-    print("❌ Failed to check the period.")
-    return False
 
 def run_bot_engine():
     global status_engine, ireland_tz
