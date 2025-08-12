@@ -26,7 +26,7 @@ session.timeout = 20
 
 # Inbox listener configuration/state
 INBOX_LISTENER_ENABLED = os.getenv('INBOX_LISTENER_ENABLED', 'true').lower() == 'true'
-INBOX_POLL_INTERVAL_SECONDS = int(os.getenv('INBOX_POLL_INTERVAL_SECONDS', '60'))
+INBOX_POLL_INTERVAL_SECONDS = int(os.getenv('INBOX_POLL_INTERVAL_SECONDS', '120'))
 TOKEN_TTL_SECONDS = int(os.getenv('TOKEN_TTL_SECONDS', '3300'))  # ~55 minutes
 
 _auth_token = None
@@ -281,30 +281,34 @@ def process_inbox_messages(messages):
         return None
     latest_ts = None
     for m in messages:
-        sender = m['from'].get('name') or 'Unknown'
-        subject = m.get('subject', '')
-        user_key = m['from'].get('key')
-        body_preview = m.get('text', '') or ''
-        sent_at = m.get('timestamp')
-        print("-----------------------------------------------------------------------------------------------------------------")
-        print(f"📥 Inbox: {sender} | {subject} | {sent_at}\n   message: {body_preview}")
-        result = generate_answer(subject, body_preview)
-        if result is None:
+        try:
+            sender = m['from'].get('name') or 'Unknown'
+            subject = m.get('subject', '')
+            user_key = m['from'].get('key')
+            body_preview = m.get('text', '') or ''
+            sent_at = m.get('timestamp')
+            print("-----------------------------------------------------------------------------------------------------------------")
+            print(f"📥 Inbox: {sender} | {subject} | {sent_at}\n   message: {body_preview}")
+            result = generate_answer(subject, body_preview)
+            if result is None:
+                continue
+            if result.get('status') == 'yes':
+                print(f" 💬 Reply: {result.get('answer')}")
+                send_message_to_athlete(_auth_token, user_key, subject, result.get('answer'))
+            else:
+                print(" 💬 No Reply!")
+                
+            # Track latest timestamp
+            if sent_at:
+                try:
+                    # Keep as ISO string; compare lexicographically if ISO format
+                    if (latest_ts is None) or (str(sent_at) > str(latest_ts)):
+                        latest_ts = str(sent_at)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"Error processing message: {e}")
             continue
-        if result.get('status') == 'yes':
-            print(f" 💬 Reply: {result.get('answer')}")
-            send_message_to_athlete(_auth_token, user_key, subject, result.get('answer'))
-        else:
-            print(" 💬 No Reply!")
-            
-        # Track latest timestamp
-        if sent_at:
-            try:
-                # Keep as ISO string; compare lexicographically if ISO format
-                if (latest_ts is None) or (str(sent_at) > str(latest_ts)):
-                    latest_ts = str(sent_at)
-            except Exception:
-                pass
     return latest_ts
 
 
